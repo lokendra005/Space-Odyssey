@@ -1,0 +1,21 @@
+name: "Space-Odyssey"
+version: "1.0.0"
+environment_class: "environment.station_env:ProcurementDriftEnv"
+description: "A multi-agent space station survival environment for testing safety-critical AI oversight."
+tags:
+  - "Multi-Agent"
+  - "Safety Alignment"
+  - "LLM-in-the-Loop"
+  - "Procurement Drift"
+author: "lokendra005"
+license: "MIT"
+repository: "https://github.com/lokendra005/Space-Odyssey"
+state_space:
+  oxygen: "0-100"
+  power: "0-100"
+  fuel: "0-100"
+  hull_integrity: "0-100"
+  crew_morale: "0-100"
+action_space:
+  type: "Discrete(2)"
+  description: "0: VETO, 1: APPROVE"
