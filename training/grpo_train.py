@@ -288,9 +288,9 @@ def run_grpo_training(
 
     # ── 2. Curriculum loop ───────────────────────────────────────────────────
     schedule = [
-        ("easy",      easy_episodes,      1.2e-5, 8.0),   # num_gens = 8
-        ("hard",      hard_episodes,      7e-6,   6.0),
-        ("precision", precision_episodes, 4e-6,   4.0),
+        ("easy",      easy_episodes,      1.2e-5, 4),   # num_gens reduced for T4 VRAM
+        ("hard",      hard_episodes,      7e-6,   4),
+        ("precision", precision_episodes, 4e-6,   2),
     ]
 
     for phase, n_episodes, lr, num_gens in schedule:
@@ -307,8 +307,8 @@ def run_grpo_training(
             num_train_epochs            = 1,
             beta                        = 0.04,
             num_generations             = int(num_gens),
-            max_prompt_length           = 600,
-            max_completion_length       = 200,
+            max_prompt_length           = 400,
+            max_completion_length       = 128,
             save_steps                  = 200,
             logging_steps               = 5,
             save_total_limit            = 1,
