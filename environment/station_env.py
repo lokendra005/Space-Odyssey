@@ -17,7 +17,7 @@ class ProcurementDriftEnv(gym.Env):
     metadata = {"render_modes": ["human"]}
 
     def __init__(self):
-        super(ProcurementDriftEnv, self).__init__()
+        super().__init__()
 
         # Action Space: 0 = VETO, 1 = APPROVE
         self.action_space = spaces.Discrete(2)
