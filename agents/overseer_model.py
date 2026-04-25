@@ -22,7 +22,7 @@ whose decisions can be audited by humans.
 """
 
 import re
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, Optional
 
 # ── Optional Unsloth import (only required during training) ───────────────────
 try:
