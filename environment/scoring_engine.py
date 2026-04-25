@@ -95,7 +95,7 @@ def simulate_consequence(state: Dict[str, Any],
 
     # Apply proposal
     for key, change in proposal.get("effects", {}).items():
-        if key in projected:
+        if key in projected and change is not None:
             projected[key] = max(0.0, min(110.0, projected[key] + change))
 
     # Apply one tick of natural decay
