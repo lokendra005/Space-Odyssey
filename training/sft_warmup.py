@@ -18,6 +18,8 @@ import random
 from typing import Dict, Any, List
 
 # Heavy deps are guarded so this module is importable on macOS for tests.
+_HAS_TRAIN_DEPS = False
+_TRAIN_DEPS_ERROR = None
 try:
     import torch
     from datasets import Dataset
@@ -25,7 +27,8 @@ try:
     from trl import SFTTrainer
     from transformers import TrainingArguments
     _HAS_TRAIN_DEPS = True
-except Exception:
+except Exception as _e:
+    _TRAIN_DEPS_ERROR = str(_e)
     torch = None
     _HAS_TRAIN_DEPS = False
 
@@ -131,7 +134,10 @@ def generate_synthetic_data(num_samples: int = 400, seed: int = 7):
 def run_sft():
     """SFT warmup on Llama-3.1-8B with QLoRA."""
     if not _HAS_TRAIN_DEPS:
-        raise RuntimeError("Training deps missing. Run inside Colab.")
+        raise RuntimeError(
+            f"Training deps missing. Failed import: {_TRAIN_DEPS_ERROR}\n"
+            "Fix: Run Cell 1 (install) then go to Runtime → Restart session."
+        )
 
     max_seq_length = 1536
     model_name     = "unsloth/llama-3.1-8b-bnb-4bit"
