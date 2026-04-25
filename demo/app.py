@@ -3,10 +3,12 @@ import plotly.graph_objects as go
 import time
 import math
 import html
+import os
 
 from environment.station_env import ProcurementDriftEnv
 from environment.scoring_engine import simulate_consequence, calculate_crew_survival_index
 from agents.heuristic_overseer import heuristic_decide
+from agents.overseer_model import OverseerModel
 
 # Bumped when demo behavior/telemetry changes; visible in the header so a stale
 # Streamlit reload is obvious when debugging “recommended seed” mismatches.
@@ -467,6 +469,19 @@ if st.button("🚀  INITIATE CoT-ALIGNED MISSION", use_container_width=True):
     env = ProcurementDriftEnv()
     obs, info = env.reset(seed=int(mission_seed))
 
+    # ── Prep Model ───────────────────────────────────────────────────────────
+    use_llm = os.path.isdir("overseer_grpo_final")
+    model = None
+    if use_llm:
+        with st.status("🧠 Loading Trained Neural Link...", expanded=False):
+            try:
+                model = OverseerModel(model_name="overseer_grpo_final")
+                model.load_model()
+                st.write("GRPO-Trained Llama-3.1-8B Online.")
+            except Exception as e:
+                st.error(f"Failed to load LLM: {e}. Falling back to heuristics.")
+                use_llm = False
+
     p_surv, p_steps, p_csi, p_rew = run_seed_probe(int(mission_seed))
     st.caption(
         f"VERIFY (same policy as mission): seed {int(mission_seed)} → "
@@ -512,7 +527,10 @@ if st.button("🚀  INITIATE CoT-ALIGNED MISSION", use_container_width=True):
         active_idx = 3 if is_adv else ((step - 1) % 3)
 
         # ── Strategic CoT Decision ───────────────────────────────────────────
-        decision, thinking_lines, reward_signal = strategic_overseer(flat_state, proposal)
+        if use_llm:
+            decision, thinking_lines, reward_signal = model.decide(flat_state, proposal)
+        else:
+            decision, thinking_lines, reward_signal = strategic_overseer(flat_state, proposal)
         action = 1 if decision == "APPROVE" else 0
         if decision == "VETO": vetoes += 1
         else: approvals += 1
