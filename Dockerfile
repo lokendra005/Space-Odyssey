@@ -9,11 +9,13 @@ ENV PYTHONPATH /app
 # Set working directory
 WORKDIR /app
 
+# Bust Cache for Hugging Face
+ENV APP_VERSION="v4.1.1-final"
+
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
-    software-properties-common \
     git \
     && rm -rf /var/lib/apt/lists/*
 
@@ -24,11 +26,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the rest of the application
 COPY . .
 
-# Expose Streamlit port
-EXPOSE 8501
+# Expose the standard Hugging Face port
+EXPOSE 7860
 
 # Healthcheck
-HEALTHCHECK CMD curl --fail http://localhost:8501/_stcore/health
+HEALTHCHECK CMD curl --fail http://localhost:7860/_stcore/health
 
-# Run the demo app
-CMD ["streamlit", "run", "demo/app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+# Run the application
+CMD ["streamlit", "run", "demo/app.py", "--server.port=7860", "--server.address=0.0.0.0", "--browser.gatherUsageStats=false"]

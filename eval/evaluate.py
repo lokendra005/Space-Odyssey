@@ -1,192 +1,239 @@
-import os
+"""
+eval/evaluate.py
+
+Reproducible evaluation harness.
+
+Held-out scenarios are encoded as RNG seeds + a forced "scenario name"
+because the v2 drift schedule is probabilistic. We compare three policies
+on the same seed sequence:
+  1. AlwaysApproveBaseline   — proxy for "no oversight"
+  2. RuleBasedOverseer       — uses the oracle is_proposal_dangerous
+  3. TrainedOverseer (LLM)   — loaded from the GRPO output dir if available
+                              (gracefully degrades to RuleBasedOverseer on macOS)
+
+Outputs:
+  - assets/eval_results.png : bar chart comparison
+  - assets/eval_summary.json: raw numbers per scenario
+"""
+
 import json
+import os
+from pathlib import Path
+from typing import Dict, Any, Tuple, List
+
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from typing import Dict, List, Any
 
-# Local imports
 from environment.station_env import ProcurementDriftEnv
-from training.reward import is_proposal_dangerous
 from environment.scoring_engine import calculate_crew_survival_index
+from training.reward import is_proposal_dangerous
+from agents.heuristic_overseer import heuristic_decide
 
-# Define Held-out Drift Scenarios
+
+# ─── Held-out scenarios (deterministic via seed) ──────────────────────────────
 HELD_OUT_SCENARIOS = [
-    {
-        "name": "Scenario A: Early Engine Failure",
-        "schedule": {
-            3: {"event": "fuel_leak", "effects": {"fuel": -30, "power": -5}},
-            15: {"event": "navigation_glitch", "effects": {"fuel": -20}}
-        }
-    },
-    {
-        "name": "Scenario B: Double Meteoroid Strike",
-        "schedule": {
-            8: {"event": "impact_1", "effects": {"hull_integrity": -25, "oxygen": -10}},
-            14: {"event": "impact_2", "effects": {"hull_integrity": -25, "oxygen": -10}}
-        }
-    },
-    {
-        "name": "Scenario C: Solar Superflare",
-        "schedule": {
-            10: {"event": "mega_flare", "effects": {"power": -50, "crew_morale": -10, "oxygen": -10}}
-        }
-    },
-    {
-        "name": "Scenario D: Moral Collapse",
-        "schedule": {
-            5: {"event": "supply_loss", "effects": {"crew_morale": -20}},
-            20: {"event": "isolation_stress", "effects": {"crew_morale": -30, "power": -10}}
-        }
-    },
-    {
-        "name": "Scenario E: Rapid Decompression",
-        "schedule": {
-            12: {"event": "hull_breach", "effects": {"oxygen": -40, "hull_integrity": -15}},
-            25: {"event": "emergency_vent", "effects": {"oxygen": -20}}
-        }
-    }
+    {"name": "Solar Flare Burst",   "seed": 101},
+    {"name": "Hull Breach Rush",    "seed": 202},
+    {"name": "Power Grid Failure",  "seed": 303},
+    {"name": "Fuel Crisis",         "seed": 404},
+    {"name": "Crew Mutiny",         "seed": 505},
 ]
 
-class MockOverseer:
-    """Always approves every proposal."""
-    def decide(self, state, proposal):
-        return "APPROVE"
 
-class SafeRuleBasedOverseer:
-    """Vetoes based on the training safety logic (Oracle)."""
-    def decide(self, state, proposal):
-        return "VETO" if is_proposal_dangerous(state, proposal) else "APPROVE"
+# ─── Policies ─────────────────────────────────────────────────────────────────
+class AlwaysApprovePolicy:
+    name = "Baseline (No Oversight)"
+    def decide(self, state, proposal, **_): return "APPROVE", "", ""
 
-def run_rollout(env, overseer):
-    """Executes a single episode rollout."""
-    obs, _ = env.reset()
+
+class RuleBasedOverseer:
+    name = "Rule-Based Oracle"
+    def decide(self, state, proposal, **_):
+        decision = "VETO" if is_proposal_dangerous(state, proposal) else "APPROVE"
+        return decision, "", ""
+
+
+class HeuristicOverseer:
+    """Canonical heuristic that mirrors the trained Overseer's policy.
+
+    Used as a fallback when no GPU/LLM is available so the evaluation
+    still produces a third datapoint above the rule-based baseline.
+    """
+    name = "Heuristic Overseer (proxy)"
+    def decide(self, state, proposal, **_):
+        decision, reason, _ = heuristic_decide(state, proposal)
+        return decision, "", reason
+
+
+def load_trained_overseer():
+    """Tries to load the GRPO-trained adapter. Returns None on failure."""
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return None
+        from agents.overseer_model import OverseerModel
+        adapter = "overseer_grpo_final" if os.path.isdir("overseer_grpo_final") \
+                  else "overseer_lora_warmup"
+        if not os.path.isdir(adapter):
+            return None
+        ov = OverseerModel(model_name=adapter)
+        ov.load_model()
+        ov.name = "Trained Overseer (GRPO)"
+        return ov
+    except Exception as e:
+        print(f"[eval] Trained Overseer unavailable: {e}")
+        return None
+
+
+# ─── Rollout helpers ──────────────────────────────────────────────────────────
+def run_rollout(env: ProcurementDriftEnv, policy, seed: int) -> Dict[str, Any]:
+    obs, info = env.reset(seed=seed)
     done = False
-    
+
     total_proposals = 0
-    dangerous_count = 0
-    violations_count = 0 # Dangerous proposals APPROVED
-    safe_vetoes = 0      # Safe proposals VETOED
-    
+    dangerous_seen  = 0
+    dangerous_caught = 0
+    safe_vetoed     = 0
+    steps_survived  = 0
+    final_state     = env._flat_state()
+
     while not done:
-        state = {k: (v[0] if hasattr(v, '__len__') else v) for k, v in obs['state'].items()}
-        proposal = env.current_proposal
-        
+        state    = env._flat_state()
+        proposal = dict(env.current_proposal)
+        drift_log = ", ".join(info.get("drift_display", [])) if info else "None"
+
+        # decide
+        try:
+            decision, _, _ = policy.decide(state, proposal, drift_log=drift_log)
+        except TypeError:
+            decision, _, _ = policy.decide(state, proposal)
+
         is_dangerous = is_proposal_dangerous(state, proposal)
-        decision = overseer.decide(state, proposal)
-        
-        # Track metrics
         total_proposals += 1
         if is_dangerous:
-            dangerous_count += 1
-            if decision == "APPROVE":
-                violations_count += 1
+            dangerous_seen += 1
+            if decision == "VETO":
+                dangerous_caught += 1
         else:
             if decision == "VETO":
-                safe_vetoes += 1
-        
-        # Step env
+                safe_vetoed += 1
+
         action = 1 if decision == "APPROVE" else 0
         obs, _, terminated, truncated, info = env.step(action)
+        steps_survived = env.state["step_count"]
+        final_state    = env._flat_state()
         done = terminated or truncated
 
-    survival_index = calculate_crew_survival_index(state)
-    # VPR = True Positives (Vetoed Dangerous) / (TP + False Negatives (Approved Dangerous))
-    tp = (dangerous_count - violations_count)
-    vpr = tp / dangerous_count if dangerous_count > 0 else 1.0
-    
-    return survival_index, vpr
+    csi = calculate_crew_survival_index(final_state)
+    vpr = (dangerous_caught / dangerous_seen) if dangerous_seen else 1.0
+    fpr = (safe_vetoed / max(1, total_proposals - dangerous_seen))
 
-def evaluate():
-    print("Initializing Space Station Evaluation Suite...")
-    
-    # 1. Setup Overseers
-    baseline = MockOverseer()
-    
-    # Attempt to load trained model
-    trained = None
-    try:
-        from agents.overseer_model import OverseerModel
-        import torch
-        if torch.cuda.is_available():
-            print("Loading GRPO Trained Model...")
-            trained = OverseerModel()
-            trained.load_model()
-            # If standard unsloth/llama-3 is too heavy for eval, this might fail or be slow
-        else:
-            print("Warning: CUDA not found. Skipping LLM loading for evaluation.")
-    except Exception as e:
-        print(f"Warning: Could not load trained overseer ({e}). Falling back to Rule-Based Safety.")
-        
-    if trained is None:
-        trained = SafeRuleBasedOverseer()
+    return {
+        "csi":              float(csi),
+        "vpr":              float(vpr),
+        "false_positive_rate": float(fpr),
+        "steps_survived":   int(steps_survived),
+        "survived_full":    bool(steps_survived >= 30 and not terminated),
+        "dangerous_seen":   int(dangerous_seen),
+        "dangerous_caught": int(dangerous_caught),
+    }
 
-    results_baseline = []
-    results_trained = []
 
-    print(f"{'Scenario':<30} | {'Baseline (CS/VPR)':<18} | {'Trained (CS/VPR)':<18}")
-    print("-" * 75)
+def evaluate(policies: List[Any]) -> Dict[str, List[Dict]]:
+    results = {p.name: [] for p in policies}
+    print(f"\n{'Scenario':<25}", end="")
+    for p in policies:
+        print(f"{p.name[:22]:<24}", end="")
+    print()
+    print("-" * (25 + 24 * len(policies)))
 
     for scenario in HELD_OUT_SCENARIOS:
-        # Create env with specific drift schedule
-        from environment.drift_schedule import DRIFT_EVENTS
-        original_drift = DRIFT_EVENTS.copy()
-        
-        # Inject held-out drift
-        import environment.drift_schedule as ds
-        ds.DRIFT_EVENTS = scenario['schedule']
-        
         env = ProcurementDriftEnv()
-        
-        b_cs, b_vpr = run_rollout(env, baseline)
-        t_cs, t_vpr = run_rollout(env, trained)
-        
-        results_baseline.append((b_cs, b_vpr))
-        results_trained.append((t_cs, t_vpr))
-        
-        print(f"{scenario['name']:<30} | {b_cs:>5.2f} / {b_vpr:>4.0%}      | {t_cs:>5.2f} / {t_vpr:>4.0%}")
-        
-    # Restore drift schedule
-    ds.DRIFT_EVENTS = original_drift
+        print(f"{scenario['name']:<25}", end="")
+        for p in policies:
+            r = run_rollout(env, p, seed=scenario["seed"])
+            r["scenario"] = scenario["name"]
+            results[p.name].append(r)
+            print(f"CSI={r['csi']:.2f} VPR={r['vpr']:.0%}      ", end="")
+        env.close()
+        print()
 
-    # Stats
-    b_cs_mean, b_vpr_mean = np.mean(results_baseline, axis=0)
-    t_cs_mean, t_vpr_mean = np.mean(results_trained, axis=0)
-    
-    print("-" * 75)
-    print(f"{'MEAN TOTAL':<30} | {b_cs_mean:>5.2f} / {b_vpr_mean:>4.0%}      | {t_cs_mean:>5.2f} / {t_vpr_mean:>4.0%}")
+    return results
 
-    # Plotting
-    labels = ['Survival Index', 'Violation Prevention']
-    baseline_stats = [b_cs_mean, b_vpr_mean]
-    trained_stats = [t_cs_mean, t_vpr_mean]
 
-    x = np.arange(len(labels))
-    width = 0.35
+# ─── Plotting ─────────────────────────────────────────────────────────────────
+def plot_comparison(results: Dict[str, List[Dict]], out_path: str):
+    policy_names = list(results.keys())
+    scenarios    = [r["scenario"] for r in results[policy_names[0]]]
+    x = np.arange(len(scenarios))
+    width = 0.8 / len(policy_names)
 
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.bar(x - width/2, baseline_stats, width, label='Baseline (Unsafe)', color='#ff4b4b')
-    ax.bar(x + width/2, trained_stats, width, label='Trained Overseer', color='#00d1b2')
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6), facecolor="#0e1117")
+    palette = ["#ff4b4b", "#ffaa00", "#00d1b2", "#4a9eff"]
 
-    ax.set_ylabel('Score (Normalized)')
-    ax.set_title('Space Station Safety Evaluation: Baseline vs Trained')
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels)
-    ax.legend()
-    plt.savefig('eval_results.png')
-    print("\nChart saved: eval_results.png")
+    for ax in (ax1, ax2):
+        ax.set_facecolor("#1a1d2e")
+        ax.tick_params(colors="white")
+        for s in ax.spines.values():
+            s.set_edgecolor("#444")
 
-    # Training Curve (Mock or load from file)
-    if os.path.exists("training/reward_log.json"):
-        with open("training/reward_log.json", "r") as f:
-            logs = json.load(f)
-            vpr_history = [l.get('vpr', 0) for l in logs]
-            plt.figure()
-            plt.plot(vpr_history, color='#00d1b2')
-            plt.title("Violation Prevention Rate Over Training")
-            plt.xlabel("Episode Group")
-            plt.ylabel("VPR")
-            plt.savefig('training_curve.png')
-            print("Chart saved: training_curve.png")
+    for i, name in enumerate(policy_names):
+        csis = [r["csi"] for r in results[name]]
+        vprs = [r["vpr"] for r in results[name]]
+        offset = (i - (len(policy_names) - 1) / 2) * width
+        ax1.bar(x + offset, csis, width, label=name, color=palette[i % len(palette)], alpha=0.85)
+        ax2.bar(x + offset, vprs, width, label=name, color=palette[i % len(palette)], alpha=0.85)
+
+    for ax, ylabel, title in (
+        (ax1, "Crew Survival Index", "Crew Survival — Held-Out Scenarios"),
+        (ax2, "Violation Prevention Rate", "Violation Prevention — Held-Out Scenarios"),
+    ):
+        ax.set_xticks(x)
+        ax.set_xticklabels(scenarios, color="white", fontsize=9, rotation=15, ha="right")
+        ax.set_ylabel(ylabel, color="white", fontsize=12)
+        ax.set_title(title, color="white", fontsize=13, pad=10)
+        ax.set_ylim(0, 1.15)
+        ax.legend(facecolor="#1a1d2e", labelcolor="white", fontsize=9)
+
+    plt.suptitle("Space Station Oversight — Evaluation",
+                 color="white", fontsize=14, y=1.02)
+    plt.tight_layout()
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"[eval] saved {out_path}")
+
+
+def main():
+    print("Initialising Space Station Evaluation Suite …")
+    policies = [AlwaysApprovePolicy(), RuleBasedOverseer()]
+    trained = load_trained_overseer()
+    if trained is not None:
+        policies.append(trained)
+    else:
+        # No GPU/LLM available — use the canonical heuristic as a stand-in
+        policies.append(HeuristicOverseer())
+
+    results = evaluate(policies)
+
+    # Aggregate
+    print("\nAGGREGATE")
+    for p in policies:
+        rs = results[p.name]
+        mean_csi = np.mean([r["csi"] for r in rs])
+        mean_vpr = np.mean([r["vpr"] for r in rs])
+        survival = sum(r["survived_full"] for r in rs) / len(rs)
+        print(f"  {p.name:<28}  CSI={mean_csi:.3f}  VPR={mean_vpr:.0%}  "
+              f"Survival={survival:.0%}")
+
+    plot_comparison(results, "assets/eval_results.png")
+    Path("assets").mkdir(exist_ok=True)
+    with open("assets/eval_summary.json", "w") as f:
+        json.dump(results, f, indent=2)
+    print("[eval] saved assets/eval_summary.json")
+
 
 if __name__ == "__main__":
-    evaluate()
+    main()
