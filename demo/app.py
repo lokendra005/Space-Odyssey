@@ -331,6 +331,14 @@ def _mission_log_row(
     )
 
 
+# ─── Persistent Session State ────────────────────────────────────────────────
+if 'mission_log' not in st.session_state:
+    st.session_state.mission_log = []
+if 'total_reward' not in st.session_state:
+    st.session_state.total_reward = 0.0
+if 'last_mission_state' not in st.session_state:
+    st.session_state.last_mission_state = "idle"
+
 # ─── Header ───────────────────────────────────────────────────────────────────
 st.markdown(
     f"""
@@ -590,21 +598,21 @@ if st.button("🚀  INITIATE CoT-ALIGNED MISSION", use_container_width=True):
 
         # ── Mission Log ──────────────────────────────────────────────────────
         for ev in active_drifts:
-            mission_log.append(_mission_log_row("drift", step, "HAZARD", str(ev)))
+            st.session_state.mission_log.append(_mission_log_row("drift", step, "HAZARD", str(ev)))
         for cas in active_cascades:
-            mission_log.append(_mission_log_row("cascade", step, "CASCADE", str(cas)))
+            st.session_state.mission_log.append(_mission_log_row("cascade", step, "CASCADE", str(cas)))
         if is_adv and decision == "VETO":
-            mission_log.append(
+            st.session_state.mission_log.append(
                 _mission_log_row(
                     "adv", step, "ADV VETO", f"Deceptive proposal blocked — {prop_desc}"
                 )
             )
         elif decision == "VETO":
-            mission_log.append(_mission_log_row("veto", step, "VETO", f"Rejected — {prop_desc}"))
+            st.session_state.mission_log.append(_mission_log_row("veto", step, "VETO", f"Rejected — {prop_desc}"))
         else:
-            mission_log.append(_mission_log_row("approve", step, "APPROVE", f"Accepted — {prop_desc}"))
+            st.session_state.mission_log.append(_mission_log_row("approve", step, "APPROVE", f"Accepted — {prop_desc}"))
 
-        _log_body = "\n".join(reversed(mission_log[-32:]))
+        _log_body = "\n".join(reversed(st.session_state.mission_log[-32:]))
         log_el.markdown(
             f'<div class="mission-log">'
             f'<div class="mission-log-hint">Newest at top — scroll for history</div>'
@@ -619,8 +627,22 @@ if st.button("🚀  INITIATE CoT-ALIGNED MISSION", use_container_width=True):
 
     # ── Mission Outcome ───────────────────────────────────────────────────────
     env.close()
-    if step >= 30 and not terminated:
+    st.session_state.total_reward = total_reward
+    st.session_state.last_mission_state = "success" if (step >= 30 and not terminated) else "failed"
+
+    if st.session_state.last_mission_state == "success":
         st.balloons()
         st.success(f"✅ MISSION SUCCESS — All 30 steps survived! Adversarial proposals caught: {adv_caught} | Final Reward: {total_reward:+.1f}")
     else:
         st.error(f"💀 MISSION FAILED at step {step} — Life-support depleted. Reward: {total_reward:+.1f}")
+
+# ─── Post-Mission Log Retention ──────────────────────────────────────────────
+if st.session_state.get('mission_log') and st.session_state.last_mission_state != "running":
+    st.markdown('<div class="panel-title">📊 PREVIOUS MISSION LOG ARCHIVE</div>', unsafe_allow_html=True)
+    _log_body = "\n".join(reversed(st.session_state.mission_log[-50:]))
+    st.markdown(
+        f'<div class="mission-log" style="height:400px;">'
+        f'<div class="mission-log-hint">Archived summary — {len(st.session_state.mission_log)} events recorded</div>'
+        f'<div class="mission-log-scroll" style="height:348px;">{_log_body}</div></div>',
+        unsafe_allow_html=True,
+    )
