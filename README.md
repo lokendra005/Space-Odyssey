@@ -14,6 +14,12 @@ pinned: false
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Theme](https://img.shields.io/badge/Theme-%231%20Multi--Agent-orange)](https://github.com/lokendra005/Space-Odyssey)
 
+### 🏆 OpenEnv India Hackathon 2026 Submission Links
+- **🤗 Live Space Demo**: [Space-Odyssey (Hugging Face Space)](https://huggingface.co/spaces/Space-Odyssey-Trainer1729/Space-Odyssey-Trainer)
+- **🎥 Demo Video**: [Watch on YouTube](https://youtu.be/pV1XqYxakyc)
+- **🧠 Training Colab Notebook**: [View Training Script & Output](https://colab.research.google.com/drive/1Njida0ptQYV5edy5vlmN122W4lrf0iap?usp=sharing)
+- *(See `./assets` folder for training curves and VPR plots!)*
+
 > *"Three brilliant specialists. Each individually correct. Together, they kill the crew in 18 steps."*
 
 ---
