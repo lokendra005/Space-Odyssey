@@ -470,23 +470,47 @@ if st.button("🚀  INITIATE CoT-ALIGNED MISSION", use_container_width=True):
     obs, info = env.reset(seed=int(mission_seed))
 
     # ── Prep Model (GRPO or SFT fallback) ────────────────────────────────────
+    # The trained LLM only loads on a CUDA box (Colab / paid GPU Space). On a
+    # CPU Space this would always crash with "Unsloth not available", so we
+    # detect that up-front and explain the design instead of red-erroring.
     model_folder = None
     if os.path.isdir("overseer_grpo_final"):
         model_folder = "overseer_grpo_final"
     elif os.path.isdir("overseer_lora_warmup"):
         model_folder = "overseer_lora_warmup"
 
-    use_llm = model_folder is not None
+    has_cuda = False
+    try:
+        import torch  # type: ignore
+        has_cuda = bool(torch.cuda.is_available())
+    except Exception:
+        has_cuda = False
+
+    use_llm = bool(model_folder) and has_cuda
     model = None
-    if use_llm:
-        with st.status(f"🧠 Loading Neural Link ({model_folder})...", expanded=False):
+    if model_folder and not has_cuda:
+        st.info(
+            f"🧠 LLM adapter `{model_folder}` detected, but this Space has **no GPU** — "
+            "Unsloth/bitsandbytes need CUDA. Running the deterministic **rules engine** "
+            "(the policy GRPO was trained to internalise) instead. "
+            "The trained adapter still works in Colab / on a GPU Space.",
+            icon="ℹ️",
+        )
+    elif use_llm:
+        with st.status(f"🧠 Loading Neural Link ({model_folder})...", expanded=False) as s:
             try:
                 model = OverseerModel(model_name=model_folder)
                 model.load_model()
-                st.write(f"V3 Reasoning Agent Online.")
+                s.update(label=f"🧠 Neural Link online — {model_folder}", state="complete")
             except Exception as e:
-                st.error(f"Failed to load LLM: {e}")
+                s.update(label="⚠️ Falling back to rules engine", state="error")
+                st.warning(
+                    f"Could not load LLM ({type(e).__name__}). Using deterministic rules engine."
+                )
                 use_llm = False
+                model = None
+    else:
+        st.caption("Using deterministic rules engine (no trained adapter checked into this Space).")
 
     p_surv, p_steps, p_csi, p_rew = run_seed_probe(int(mission_seed))
     st.caption(
