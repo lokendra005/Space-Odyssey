@@ -287,9 +287,12 @@ def run_grpo_training(
         )
 
     # ── 2. Curriculum loop ───────────────────────────────────────────────────
+    # T4-pinned defaults. num_generations=2 is GRPO's minimum (need ≥2 to compute
+    # relative advantages). Going to 4 caused Unsloth to enable gradient offload
+    # ("smartly offload gradients to save VRAM") which slows training ~3-5×.
     schedule = [
-        ("easy",      easy_episodes,      1.2e-5, 4),   # num_gens reduced for T4 VRAM
-        ("hard",      hard_episodes,      7e-6,   4),
+        ("easy",      easy_episodes,      1.2e-5, 2),
+        ("hard",      hard_episodes,      7e-6,   2),
         ("precision", precision_episodes, 4e-6,   2),
     ]
 
@@ -303,12 +306,12 @@ def run_grpo_training(
             output_dir                  = f"grpo_checkpoints/{phase}",
             learning_rate               = lr,
             per_device_train_batch_size = 1,
-            gradient_accumulation_steps = 8,
+            gradient_accumulation_steps = 4,   # was 8 — smaller activation cache
             num_train_epochs            = 1,
             beta                        = 0.04,
             num_generations             = int(num_gens),
-            max_prompt_length           = 400,
-            max_completion_length       = 128,
+            max_prompt_length           = 320,  # was 400
+            max_completion_length       = 96,   # was 128 — tightest cut to avoid offload
             save_steps                  = 200,
             logging_steps               = 5,
             save_total_limit            = 1,

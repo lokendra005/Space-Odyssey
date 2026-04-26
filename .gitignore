@@ -1,0 +1,39 @@
+# ── Python build artifacts ────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── Virtualenvs / IDE ────────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+.idea/
+.vscode/
+
+# ── OS junk ──────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Local-only scratch & secrets ─────────────────────────────────────────────
+scratch/
+.env
+*.local
+
+# ── Trained model artifacts (push to HF, NOT to git) ─────────────────────────
+overseer_lora_warmup/
+overseer_grpo_final/
+overseer_grpo_extended/
+grpo_checkpoints/
+*.safetensors
+*.bin
+*.pt
+*.pth
+adapter_model.safetensors
+tokenizer.json
+
+# ── Misc training side-output ────────────────────────────────────────────────
+trained_brain*.zip
+*.log
