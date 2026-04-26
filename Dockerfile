@@ -13,7 +13,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HF_HOME=/app/.cache/huggingface
 
 WORKDIR /app
-ENV APP_VERSION="v5.1-gpu"
+ENV APP_VERSION="v5.2-gpu-tv-fix"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential curl git \
@@ -23,20 +23,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# LLM stack — no `|| echo` fallback so any failure is visible in build logs.
-# Installed in dependency order: bnb → transformers/peft/accelerate/trl → unsloth.
-RUN pip install --no-cache-dir \
-        "bitsandbytes>=0.43.1" \
-        "transformers>=4.45.0,<4.50.0" \
-        "peft>=0.13.0,<0.15.0" \
-        "accelerate>=0.31.0" \
-        "datasets>=2.20.0" \
-        "trl>=0.10.0,<0.15.0" \
-        "xformers"
-
-# Unsloth — try PyPI wheel first, then fall back to git HEAD if PyPI lags.
-RUN pip install --no-cache-dir unsloth \
-    || pip install --no-cache-dir "unsloth @ git+https://github.com/unslothai/unsloth.git@main"
+# LLM stack. We install unsloth ALONGSIDE torch/torchvision/torchaudio so pip
+# resolves a self-consistent set in a single transaction (last build failed
+# because pip upgraded torch to 2.10 but left torchvision at 0.19 — Unsloth
+# refused to import on that mismatched pair). Other deps come along.
+RUN pip install --no-cache-dir --upgrade \
+        torch torchvision torchaudio \
+        unsloth \
+        bitsandbytes \
+        xformers
 
 # Build-time sanity check; prints version line into the build log.
 RUN python -c "import torch, unsloth, bitsandbytes, peft, transformers; \
