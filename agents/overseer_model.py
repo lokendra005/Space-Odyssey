@@ -235,11 +235,16 @@ class OverseerModel:
         inputs  = self.tokenizer([prompt], return_tensors="pt").to("cuda")
 
         with torch.no_grad():
+            # use_cache=False intentionally — bypasses Unsloth's fast-attention
+            # KV-cache path that crashes with PEFT-wrapped models:
+            #   "RuntimeError: output with shape [1,32,1,128] doesn't match
+            #    the broadcast shape [1,32,N,128]"
+            # Slightly slower but actually works.
             outputs = self.model.generate(
                 **inputs,
-                max_new_tokens   = 200,
-                do_sample        = False,    # deterministic for safety
-                use_cache        = True,
+                max_new_tokens   = 160,
+                do_sample        = False,
+                use_cache        = False,
                 pad_token_id     = self.tokenizer.eos_token_id,
             )
 
