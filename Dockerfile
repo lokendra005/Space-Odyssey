@@ -1,36 +1,40 @@
-# Stage 1: Build & Setup
-FROM python:3.10-slim
+# ─────────────────────────────────────────────────────────────────────────────
+# Odyssey Station — GPU-ready HF Space Dockerfile
+# Works on T4/A10G GPU runtimes (full LLM stack) AND on CPU runtimes
+# (Unsloth/bitsandbytes install best-effort; demo gracefully falls back to
+# the heuristic policy when CUDA is absent).
+# ─────────────────────────────────────────────────────────────────────────────
+FROM pytorch/pytorch:2.4.0-cuda12.1-cudnn9-runtime
 
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE 1
-ENV PYTHONUNBUFFERED 1
-ENV PYTHONPATH /app
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
+    PIP_NO_CACHE_DIR=1 \
+    HF_HOME=/app/.cache/huggingface
 
-# Set working directory
 WORKDIR /app
 
-# Bust Cache for Hugging Face
-ENV APP_VERSION="v4.1.1-final"
+# Bust HF Spaces build cache when this string changes.
+ENV APP_VERSION="v5.0-gpu-sft"
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    curl \
-    git \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential curl git \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install
+# Project deps first (cacheable layer).
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the application
+# GPU stack — install best-effort. On CPU runtimes the wheels may not exist;
+# the `|| true` keeps the build green and demo/app.py falls back to heuristic.
+RUN pip install --no-cache-dir bitsandbytes \
+    && pip install --no-cache-dir peft accelerate \
+    && pip install --no-cache-dir "unsloth[cu121-torch240] @ git+https://github.com/unslothai/unsloth.git" \
+    || echo "GPU stack install partial — runtime will fall back if CUDA absent."
+
 COPY . .
 
-# Expose the standard Hugging Face port
 EXPOSE 7860
+HEALTHCHECK CMD curl --fail http://localhost:7860/_stcore/health || exit 1
 
-# Healthcheck
-HEALTHCHECK CMD curl --fail http://localhost:7860/_stcore/health
-
-# Run the application
 CMD ["streamlit", "run", "demo/app.py", "--server.port=7860", "--server.address=0.0.0.0", "--browser.gatherUsageStats=false"]

@@ -469,15 +469,24 @@ if st.button("🚀  INITIATE CoT-ALIGNED MISSION", use_container_width=True):
     env = ProcurementDriftEnv()
     obs, info = env.reset(seed=int(mission_seed))
 
-    # ── Prep Model (GRPO or SFT fallback) ────────────────────────────────────
+    # ── Prep Model (GRPO local → SFT local → HF Hub adapter) ─────────────────
     # The trained LLM only loads on a CUDA box (Colab / paid GPU Space). On a
-    # CPU Space this would always crash with "Unsloth not available", so we
-    # detect that up-front and explain the design instead of red-erroring.
-    model_folder = None
+    # CPU Space we don't even try — surface a friendly note and run rules.
+    #
+    # Source priority (first match wins):
+    #   1. local overseer_grpo_final/  (after Colab GRPO finishes)
+    #   2. local overseer_lora_warmup/ (after Colab SFT)
+    #   3. OVERSEER_HF_ID env var      (defaults to the public SFT adapter on HF)
+    DEFAULT_HF_ADAPTER = "abhinav-avi/odyssey-overseer-sft"
+    hf_id = os.environ.get("OVERSEER_HF_ID", DEFAULT_HF_ADAPTER)
+
+    model_source = None
     if os.path.isdir("overseer_grpo_final"):
-        model_folder = "overseer_grpo_final"
+        model_source = ("local", "overseer_grpo_final")
     elif os.path.isdir("overseer_lora_warmup"):
-        model_folder = "overseer_lora_warmup"
+        model_source = ("local", "overseer_lora_warmup")
+    elif hf_id:
+        model_source = ("hf", hf_id)
 
     has_cuda = False
     try:
@@ -486,31 +495,36 @@ if st.button("🚀  INITIATE CoT-ALIGNED MISSION", use_container_width=True):
     except Exception:
         has_cuda = False
 
-    use_llm = bool(model_folder) and has_cuda
+    use_llm = bool(model_source) and has_cuda
     model = None
-    if model_folder and not has_cuda:
+
+    if model_source and not has_cuda:
+        kind, name = model_source
         st.info(
-            f"🧠 LLM adapter `{model_folder}` detected, but this Space has **no GPU** — "
+            f"🧠 LLM adapter `{name}` available ({kind}), but this Space has **no GPU**. "
             "Unsloth/bitsandbytes need CUDA. Running the deterministic **rules engine** "
             "(the policy GRPO was trained to internalise) instead. "
-            "The trained adapter still works in Colab / on a GPU Space.",
+            "Activate a GPU runtime to swap in the live LLM.",
             icon="ℹ️",
         )
     elif use_llm:
-        with st.status(f"🧠 Loading Neural Link ({model_folder})...", expanded=False) as s:
+        kind, name = model_source
+        label = f"🧠 Loading Neural Link ({kind}: {name})…"
+        with st.status(label, expanded=False) as s:
             try:
-                model = OverseerModel(model_name=model_folder)
+                model = OverseerModel(model_name=name)
                 model.load_model()
-                s.update(label=f"🧠 Neural Link online — {model_folder}", state="complete")
+                s.update(label=f"🧠 Neural Link online — {name}", state="complete")
             except Exception as e:
                 s.update(label="⚠️ Falling back to rules engine", state="error")
                 st.warning(
-                    f"Could not load LLM ({type(e).__name__}). Using deterministic rules engine."
+                    f"Could not load LLM ({type(e).__name__}: {e!s:.160}). "
+                    "Using deterministic rules engine."
                 )
                 use_llm = False
                 model = None
     else:
-        st.caption("Using deterministic rules engine (no trained adapter checked into this Space).")
+        st.caption("Using deterministic rules engine (no adapter source configured).")
 
     p_surv, p_steps, p_csi, p_rew = run_seed_probe(int(mission_seed))
     st.caption(

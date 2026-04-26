@@ -61,18 +61,53 @@ class OverseerModel:
         self.max_seq_length  = 2048
 
     # ── Loading ───────────────────────────────────────────────────────────────
+    BASE_MODEL = "unsloth/llama-3.1-8b-bnb-4bit"
+
     def load_model(self, use_4bit: bool = True):
+        """Robustly load a base+LoRA combo for inference on T4-class GPUs.
+
+        - If `model_name` is the base model (or the same string), loads in
+          one shot.
+        - Otherwise treats `model_name` as a PEFT adapter (local dir OR
+          HF Hub repo id) and does the safe two-step load:
+            base 4-bit  →  PeftModel.from_pretrained(base, adapter_name)
+          This sidesteps the
+            "Some modules are dispatched on CPU/disk"
+          crash seen with newer Unsloth/transformers on T4.
+        """
         if not _HAS_UNSLOTH:
             raise RuntimeError(
                 "Unsloth not available. Run on Colab/Linux+CUDA to load the LLM."
             )
+
+        adapter_name = self.model_name
+        is_adapter = adapter_name and adapter_name != self.BASE_MODEL
+
+        # Always start from the prequantised base — known to fit on T4.
         self.model, self.tokenizer = FastLanguageModel.from_pretrained(
-            model_name      = self.model_name,
+            model_name      = self.BASE_MODEL,
             max_seq_length  = self.max_seq_length,
             load_in_4bit    = use_4bit,
             dtype           = None,
         )
-        FastLanguageModel.for_inference(self.model)
+
+        if is_adapter:
+            try:
+                from peft import PeftModel  # type: ignore
+                self.model = PeftModel.from_pretrained(self.model, adapter_name)
+                # Skip Unsloth's `for_inference` because it doesn't always
+                # introspect into PeftModel wrappers; HF generate() still works.
+            except Exception as exc:
+                # If the adapter can't be attached, fall back to bare base
+                # so the demo at least keeps running with a Llama-3.1-8B reply.
+                print(
+                    f"[OverseerModel] WARNING: could not attach adapter "
+                    f"{adapter_name!r} ({exc!r}); using bare base model."
+                )
+                FastLanguageModel.for_inference(self.model)
+        else:
+            FastLanguageModel.for_inference(self.model)
+
         return self.model, self.tokenizer
 
     # ── Prompting ─────────────────────────────────────────────────────────────
