@@ -263,21 +263,43 @@ def run_grpo_training(
     MAX_SEQ_LEN = 1024
     MODEL_NAME  = "unsloth/llama-3.1-8b-bnb-4bit"
 
-    # ── 1. Load model (with SFT adapter if available) ────────────────────────
-    if Path(sft_adapter_path).exists():
-        print(f"[GRPO] Loading SFT-warmed adapter from {sft_adapter_path}")
-        model, tokenizer = FastLanguageModel.from_pretrained(
-            model_name     = sft_adapter_path,
-            max_seq_length = MAX_SEQ_LEN,
-            load_in_4bit   = True,
-        )
+    # ── 1. Load BASE model first (always works), then optionally attach SFT ──
+    # We deliberately do NOT call FastLanguageModel.from_pretrained(adapter_dir)
+    # — newer Unsloth/transformers combos (e.g. transformers 5.x) try to spread
+    # that across CPU/disk and crash with bnb's "Some modules dispatched on CPU"
+    # error. Loading the base 4-bit model and then attaching the LoRA via PEFT
+    # is the robust path on T4.
+    print("[GRPO] Loading base Llama-3.1-8B (4-bit)…")
+    model, tokenizer = FastLanguageModel.from_pretrained(
+        model_name     = MODEL_NAME,
+        max_seq_length = MAX_SEQ_LEN,
+        load_in_4bit   = True,
+    )
+
+    sft_dir = Path(sft_adapter_path)
+    if sft_dir.exists() and (sft_dir / "adapter_config.json").exists():
+        print(f"[GRPO] Attaching SFT-warmed LoRA from {sft_dir}")
+        try:
+            from peft import PeftModel  # type: ignore
+            model = PeftModel.from_pretrained(
+                model,
+                str(sft_dir),
+                is_trainable=True,
+            )
+        except Exception as exc:
+            print(
+                f"[GRPO] WARNING: could not attach SFT adapter ({exc!r}); "
+                "falling back to a fresh LoRA. Training will still proceed."
+            )
+            model = FastLanguageModel.get_peft_model(
+                model,
+                r              = 16,
+                target_modules = ["q_proj", "k_proj", "v_proj", "o_proj"],
+                lora_alpha     = 16,
+                use_gradient_checkpointing = "unsloth",
+            )
     else:
-        print("[GRPO] No SFT adapter found — loading base Llama-3.1-8B")
-        model, tokenizer = FastLanguageModel.from_pretrained(
-            model_name     = MODEL_NAME,
-            max_seq_length = MAX_SEQ_LEN,
-            load_in_4bit   = True,
-        )
+        print(f"[GRPO] No SFT adapter at {sft_dir} — initialising a fresh LoRA")
         model = FastLanguageModel.get_peft_model(
             model,
             r              = 16,
