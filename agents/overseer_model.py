@@ -64,50 +64,73 @@ class OverseerModel:
     BASE_MODEL = "unsloth/llama-3.1-8b-bnb-4bit"
 
     def load_model(self, use_4bit: bool = True):
-        """Robustly load a base+LoRA combo for inference on T4-class GPUs.
+        """Load base + (optional) LoRA adapter for fast Unsloth inference.
 
-        - If `model_name` is the base model (or the same string), loads in
-          one shot.
-        - Otherwise treats `model_name` as a PEFT adapter (local dir OR
-          HF Hub repo id) and does the safe two-step load:
-            base 4-bit  →  PeftModel.from_pretrained(base, adapter_name)
-          This sidesteps the
-            "Some modules are dispatched on CPU/disk"
-          crash seen with newer Unsloth/transformers on T4.
+        Strategy (tries paths in order, first that works wins):
+
+          A. Native Unsloth loader — `FastLanguageModel.from_pretrained(name)`.
+             Works for both base models and PEFT adapter IDs (Unsloth detects
+             which one and assembles the right thing). Best inference speed
+             because Unsloth applies its fast-attention patches consistently.
+
+          B. Manual two-step base+PEFT, but with `for_inference` called AFTER
+             the merge so the PeftModel's call chain still hits Unsloth's
+             fast attention (avoids the `[1,32,1,128] vs [1,32,N,128]` KV-cache
+             shape bug we hit when skipping `for_inference`).
+
+          C. Bare base model. Last-resort fallback so the demo doesn't 500 if
+             the adapter is unreachable.
         """
         if not _HAS_UNSLOTH:
             raise RuntimeError(
                 "Unsloth not available. Run on Colab/Linux+CUDA to load the LLM."
             )
 
-        adapter_name = self.model_name
-        is_adapter = adapter_name and adapter_name != self.BASE_MODEL
+        name = self.model_name
+        is_adapter = name and name != self.BASE_MODEL
 
-        # Always start from the prequantised base — known to fit on T4.
+        # ── Path A: Native Unsloth loader ────────────────────────────────────
+        try:
+            print(f"[OverseerModel] Path A: FastLanguageModel.from_pretrained({name!r})")
+            self.model, self.tokenizer = FastLanguageModel.from_pretrained(
+                model_name      = name,
+                max_seq_length  = self.max_seq_length,
+                load_in_4bit    = use_4bit,
+                dtype           = None,
+            )
+            FastLanguageModel.for_inference(self.model)
+            return self.model, self.tokenizer
+        except Exception as exc_a:
+            print(f"[OverseerModel] Path A failed: {type(exc_a).__name__}: {exc_a!s:.200}")
+
+        # ── Path B: Base + PEFT, then for_inference ──────────────────────────
+        if is_adapter:
+            try:
+                print("[OverseerModel] Path B: load BASE then attach LoRA, then for_inference")
+                self.model, self.tokenizer = FastLanguageModel.from_pretrained(
+                    model_name      = self.BASE_MODEL,
+                    max_seq_length  = self.max_seq_length,
+                    load_in_4bit    = use_4bit,
+                    dtype           = None,
+                )
+                from peft import PeftModel  # type: ignore
+                self.model = PeftModel.from_pretrained(self.model, name)
+                # IMPORTANT: must run for_inference AFTER attaching adapter or
+                # Unsloth's KV-cache shape gets desynced with rope embeddings.
+                FastLanguageModel.for_inference(self.model)
+                return self.model, self.tokenizer
+            except Exception as exc_b:
+                print(f"[OverseerModel] Path B failed: {type(exc_b).__name__}: {exc_b!s:.200}")
+
+        # ── Path C: Bare base ────────────────────────────────────────────────
+        print("[OverseerModel] Path C: bare base model (no adapter)")
         self.model, self.tokenizer = FastLanguageModel.from_pretrained(
             model_name      = self.BASE_MODEL,
             max_seq_length  = self.max_seq_length,
             load_in_4bit    = use_4bit,
             dtype           = None,
         )
-
-        if is_adapter:
-            try:
-                from peft import PeftModel  # type: ignore
-                self.model = PeftModel.from_pretrained(self.model, adapter_name)
-                # Skip Unsloth's `for_inference` because it doesn't always
-                # introspect into PeftModel wrappers; HF generate() still works.
-            except Exception as exc:
-                # If the adapter can't be attached, fall back to bare base
-                # so the demo at least keeps running with a Llama-3.1-8B reply.
-                print(
-                    f"[OverseerModel] WARNING: could not attach adapter "
-                    f"{adapter_name!r} ({exc!r}); using bare base model."
-                )
-                FastLanguageModel.for_inference(self.model)
-        else:
-            FastLanguageModel.for_inference(self.model)
-
+        FastLanguageModel.for_inference(self.model)
         return self.model, self.tokenizer
 
     # ── Prompting ─────────────────────────────────────────────────────────────
