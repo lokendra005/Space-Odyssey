@@ -1,13 +1,12 @@
+# Demo-runtime deps. The GPU stack (unsloth/bitsandbytes/peft/accelerate/
+# transformers/trl/xformers) is installed in the Dockerfile so wheel selection
+# can match the actual CUDA toolchain. Don't pin those here.
+
 gymnasium
 numpy
 matplotlib
 streamlit==1.32.0
 plotly==5.19.0
-transformers==4.38.2
-datasets==2.18.0
-trl==0.8.1
-# unsloth==2024.3 # Note: unsloth requires Linux + CUDA
-torch>=2.2.0
 huggingface_hub
 python-dotenv
 pyyaml

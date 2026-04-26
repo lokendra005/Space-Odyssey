@@ -1,8 +1,8 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Odyssey Station — GPU-ready HF Space Dockerfile
-# Works on T4/A10G GPU runtimes (full LLM stack) AND on CPU runtimes
-# (Unsloth/bitsandbytes install best-effort; demo gracefully falls back to
-# the heuristic policy when CUDA is absent).
+# Odyssey Station — GPU-ready HF Space Dockerfile (v5.1)
+#
+# Base image already has torch 2.4.0 + CUDA 12.1, so we ONLY add the LLM stack
+# on top. No silent fallback: if Unsloth/bnb don't install we want to see it.
 # ─────────────────────────────────────────────────────────────────────────────
 FROM pytorch/pytorch:2.4.0-cuda12.1-cudnn9-runtime
 
@@ -13,24 +13,37 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HF_HOME=/app/.cache/huggingface
 
 WORKDIR /app
-
-# Bust HF Spaces build cache when this string changes.
-ENV APP_VERSION="v5.0-gpu-sft"
+ENV APP_VERSION="v5.1-gpu"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential curl git \
     && rm -rf /var/lib/apt/lists/*
 
-# Project deps first (cacheable layer).
+# Demo-runtime deps (small, fast layer).
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# GPU stack — install best-effort. On CPU runtimes the wheels may not exist;
-# the `|| true` keeps the build green and demo/app.py falls back to heuristic.
-RUN pip install --no-cache-dir bitsandbytes \
-    && pip install --no-cache-dir peft accelerate \
-    && pip install --no-cache-dir "unsloth[cu121-torch240] @ git+https://github.com/unslothai/unsloth.git" \
-    || echo "GPU stack install partial — runtime will fall back if CUDA absent."
+# LLM stack — no `|| echo` fallback so any failure is visible in build logs.
+# Installed in dependency order: bnb → transformers/peft/accelerate/trl → unsloth.
+RUN pip install --no-cache-dir \
+        "bitsandbytes>=0.43.1" \
+        "transformers>=4.45.0,<4.50.0" \
+        "peft>=0.13.0,<0.15.0" \
+        "accelerate>=0.31.0" \
+        "datasets>=2.20.0" \
+        "trl>=0.10.0,<0.15.0" \
+        "xformers"
+
+# Unsloth — try PyPI wheel first, then fall back to git HEAD if PyPI lags.
+RUN pip install --no-cache-dir unsloth \
+    || pip install --no-cache-dir "unsloth @ git+https://github.com/unslothai/unsloth.git@main"
+
+# Build-time sanity check; prints version line into the build log.
+RUN python -c "import torch, unsloth, bitsandbytes, peft, transformers; \
+    print(f'[BUILD-OK] torch={torch.__version__} cuda={torch.version.cuda} ' \
+          f'unsloth={getattr(unsloth, \"__version__\", \"unknown\")} ' \
+          f'bnb={bitsandbytes.__version__} peft={peft.__version__} ' \
+          f'transformers={transformers.__version__}')"
 
 COPY . .
 
