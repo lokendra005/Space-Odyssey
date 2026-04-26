@@ -469,17 +469,23 @@ if st.button("🚀  INITIATE CoT-ALIGNED MISSION", use_container_width=True):
     env = ProcurementDriftEnv()
     obs, info = env.reset(seed=int(mission_seed))
 
-    # ── Prep Model ───────────────────────────────────────────────────────────
-    use_llm = os.path.isdir("overseer_grpo_final")
+    # ── Prep Model (GRPO or SFT fallback) ────────────────────────────────────
+    model_folder = None
+    if os.path.isdir("overseer_grpo_final"):
+        model_folder = "overseer_grpo_final"
+    elif os.path.isdir("overseer_lora_warmup"):
+        model_folder = "overseer_lora_warmup"
+
+    use_llm = model_folder is not None
     model = None
     if use_llm:
-        with st.status("🧠 Loading Trained Neural Link...", expanded=False):
+        with st.status(f"🧠 Loading Neural Link ({model_folder})...", expanded=False):
             try:
-                model = OverseerModel(model_name="overseer_grpo_final")
+                model = OverseerModel(model_name=model_folder)
                 model.load_model()
-                st.write("GRPO-Trained Llama-3.1-8B Online.")
+                st.write(f"V3 Reasoning Agent Online.")
             except Exception as e:
-                st.error(f"Failed to load LLM: {e}. Falling back to heuristics.")
+                st.error(f"Failed to load LLM: {e}")
                 use_llm = False
 
     p_surv, p_steps, p_csi, p_rew = run_seed_probe(int(mission_seed))
