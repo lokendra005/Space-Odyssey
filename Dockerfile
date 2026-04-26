@@ -13,7 +13,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HF_HOME=/app/.cache/huggingface
 
 WORKDIR /app
-ENV APP_VERSION="v5.2-gpu-tv-fix"
+ENV APP_VERSION="v5.3-no-build-import"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential curl git \
@@ -33,10 +33,12 @@ RUN pip install --no-cache-dir --upgrade \
         bitsandbytes \
         xformers
 
-# Build-time sanity check; prints version line into the build log.
-RUN python -c "import torch, unsloth, bitsandbytes, peft, transformers; \
+# Build-time sanity check — DOES NOT import unsloth here because HF Spaces'
+# build infrastructure has no GPU; unsloth_zoo raises:
+#   "Unsloth cannot find any torch accelerator? You need a GPU."
+# The runtime GPU container imports unsloth normally.
+RUN python -c "import torch, bitsandbytes, peft, transformers; \
     print(f'[BUILD-OK] torch={torch.__version__} cuda={torch.version.cuda} ' \
-          f'unsloth={getattr(unsloth, \"__version__\", \"unknown\")} ' \
           f'bnb={bitsandbytes.__version__} peft={peft.__version__} ' \
           f'transformers={transformers.__version__}')"
 
