@@ -158,8 +158,8 @@ The "trained proxy" is the rule-based heuristic in `agents/heuristic_overseer.py
 ![VPR Curve](assets/violation_prevention.png)
 *Violation Prevention Rate climbs from ~20% (cold start) to ~98% by the end of training.*
 
-![Evaluation](assets/eval_results.png)
-*Held-out evaluation across 5 seeds — Always-Approve baseline vs. Rule-Based Oracle vs. Trained Overseer.*
+![Reward Matrix](assets/reward_matrix.png)
+*Risk-Calibrated Reward Matrix used for Curriculum GRPO training.*
 
 ---
 
